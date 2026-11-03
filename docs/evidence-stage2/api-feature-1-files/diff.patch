@@ -1,0 +1,82 @@
+--- a/src/allocation/adapters/orm.py
++++ b/src/allocation/adapters/orm.py
+@@ -41,6 +41,7 @@
+     Column("sku", ForeignKey("products.sku")),
+     Column("_purchased_quantity", Integer, nullable=False),
+     Column("eta", Date, nullable=True),
++    Column("expiry", Date, nullable=True),
+ )
+ 
+ allocations = Table(
+--- a/src/allocation/domain/commands.py
++++ b/src/allocation/domain/commands.py
+@@ -21,6 +21,7 @@
+     sku: str
+     qty: int
+     eta: Optional[date] = None
++    expiry: Optional[date] = None
+ 
+ 
+ @dataclass
+--- a/src/allocation/domain/model.py
++++ b/src/allocation/domain/model.py
+@@ -46,10 +46,11 @@
+ 
+ 
+ class Batch:
+-    def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date]):
++    def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date], expiry: Optional[date] = None):
+         self.reference = ref
+         self.sku = sku
+         self.eta = eta
++        self.expiry = expiry
+         self._purchased_quantity = qty
+         self._allocations = set()  # type: Set[OrderLine]
+ 
+@@ -87,4 +88,8 @@
+         return self._purchased_quantity - self.allocated_quantity
+ 
+     def can_allocate(self, line: OrderLine) -> bool:
+-        return self.sku == line.sku and self.available_quantity >= line.qty
++        return (
++            self.sku == line.sku
++            and self.available_quantity >= line.qty
++            and (self.expiry is None or self.expiry >= date.today())
++        )
+--- a/src/allocation/service_layer/handlers.py
++++ b/src/allocation/service_layer/handlers.py
+@@ -1,6 +1,7 @@
+ # pylint: disable=unused-argument
+ from __future__ import annotations
+ from dataclasses import asdict
++import datetime
+ from typing import List, Dict, Callable, Type, TYPE_CHECKING
+ from allocation.domain import commands, events, model
+ from allocation.domain.model import OrderLine
+@@ -14,16 +15,25 @@
+     pass
+ 
+ 
++class InvalidExpiry(Exception):
++    pass
++
++
+ def add_batch(
+     cmd: commands.CreateBatch,
+     uow: unit_of_work.AbstractUnitOfWork,
+ ):
++    if cmd.expiry is not None:
++        if not isinstance(cmd.expiry, datetime.date):
++            raise InvalidExpiry(f"Batch {cmd.ref} has an invalid expiry date")
++        if cmd.eta is not None and cmd.expiry < cmd.eta:
++            raise InvalidExpiry(f"Batch {cmd.ref} expires before it arrives")
+     with uow:
+         product = uow.products.get(sku=cmd.sku)
+         if product is None:
+             product = model.Product(cmd.sku, batches=[])
+             uow.products.add(product)
+-        product.batches.append(model.Batch(cmd.ref, cmd.sku, cmd.qty, cmd.eta))
++        product.batches.append(model.Batch(cmd.ref, cmd.sku, cmd.qty, cmd.eta, cmd.expiry))
+         uow.commit()
+ 
+ 

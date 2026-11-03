@@ -18,6 +18,8 @@ class Tool:
     func: Callable
     mutates: bool = False
     executes: bool = False
+    optional: tuple = ()   # argument names that may be left out
+    needs_git: bool = False  # only offered when the run has private Git state
 
 
 REGISTRY = {
@@ -38,6 +40,60 @@ REGISTRY = {
             tools.search_files,
         ),
         Tool(
+            "repo_map",
+            "Compact map of Python modules: imports, classes, methods and functions.",
+            (),
+            tools.repo_map,
+        ),
+        Tool(
+            "find_symbol",
+            "Find where a class, function, method or module variable is defined (Python, by "
+            "name or Class.method). Returns path, kind, line range and signature.",
+            ("name",),
+            tools.find_symbol,
+        ),
+        Tool(
+            "find_references",
+            "Find code lines that use a Python name (variable, attribute, import, keyword "
+            "argument). Use it to see which callers a change affects.",
+            ("name",),
+            tools.find_references,
+        ),
+        Tool(
+            "module_dependencies",
+            "Show which repository modules a Python file imports and which modules import it.",
+            ("path",),
+            tools.module_dependencies,
+        ),
+        Tool(
+            "read_symbol",
+            "Read the source of one symbol in a file, e.g. symbol 'Product.allocate'.",
+            ("path", "symbol"),
+            tools.read_symbol,
+        ),
+        Tool(
+            "git_status",
+            "Show the starting commit and which files differ from it.",
+            (),
+            tools.git_status,
+            needs_git=True,
+        ),
+        Tool(
+            "git_diff",
+            "Show your changes since the starting commit, optionally for one path.",
+            (),
+            tools.git_diff,
+            optional=("path",),
+            needs_git=True,
+        ),
+        Tool(
+            "git_log",
+            "Show the latest commits of the target repository.",
+            (),
+            tools.git_log,
+            needs_git=True,
+        ),
+        Tool(
             "write_file",
             "Create a new file inside the writable scope. Fails if the file already exists.",
             ("path", "content"),
@@ -52,6 +108,15 @@ REGISTRY = {
             "compile are rejected.",
             ("path", "old", "new"),
             tools.edit_file,
+            mutates=True,
+        ),
+        Tool(
+            "replace_symbol",
+            "Replace one whole function, method, class or module variable with `source`, the "
+            "complete new definition; indentation is adjusted for you. Preferred over edit_file "
+            "for Python. Edits that do not compile are rejected.",
+            ("path", "symbol", "source"),
+            tools.replace_symbol,
             mutates=True,
         ),
         Tool(

@@ -7,13 +7,21 @@ and the sandbox share one scope: the run's workspace directory.
 
 import difflib
 import os
+import tempfile
+import textwrap
 from pathlib import Path, PurePosixPath
+
+from .navigation import RepoIndex
 
 MAX_CHARS = 12_000
 MAX_FILE_BYTES = 64_000
 MAX_LISTED = 300
 MAX_MATCHES = 50
 EXCERPT_CHARS = 160
+MAX_REFERENCES = 60
+MAX_SYMBOLS = 40
+MAX_DIFF_CHARS = 8000
+MAP_CHARS = 4000
 SKIPPED_DIRS = {"__pycache__"}
 
 
@@ -127,7 +135,151 @@ def search_files(runtime, query):
     return result
 
 
+# --- navigation tools ----------------------------------------------------
+
+
+def _index(runtime):
+    return RepoIndex(runtime.root, list(walk_files(runtime.root)))
+
+
+def repo_map(runtime):
+    return {"map": _index(runtime).repo_map(max_chars=MAP_CHARS)}
+
+
+def find_symbol(runtime, name):
+    if not name.strip():
+        raise ValueError("name must not be empty")
+    symbols = _index(runtime).find_symbol(name.strip())
+    result = {
+        "symbols": [{"qualname": s.qualname, "kind": s.kind, "path": s.path, "line": s.line, "end_line": s.end_line,
+                     "signature": s.signature} for s in symbols[:MAX_SYMBOLS]],
+        "truncated": len(symbols) > MAX_SYMBOLS,
+    }
+    if not symbols:
+        result["note"] = "No Python symbol has this name. Try find_references or search_files."
+    return result
+
+
+def find_references(runtime, name):
+    if not name.strip():
+        raise ValueError("name must not be empty")
+    references = _index(runtime).find_references(name.strip())
+    return {"references": references[:MAX_REFERENCES], "total": len(references),
+            "truncated": len(references) > MAX_REFERENCES}
+
+
+def module_dependencies(runtime, path):
+    _, relative = resolve_path(runtime, path)
+    index = _index(runtime)
+    if relative not in index.modules:
+        raise ValueError(f"{relative} is not an indexed Python module")
+    return index.dependencies(relative)
+
+
+def read_symbol(runtime, path, symbol):
+    _, relative = resolve_path(runtime, path)
+    index = _index(runtime)
+    found = index.symbol_at(relative, symbol)
+    if found is None:
+        raise ValueError(_symbol_help(index, relative, symbol))
+    lines = index.modules[relative].text.splitlines()
+    return {"path": relative, "symbol": found.qualname, "kind": found.kind, "line": found.line,
+            "end_line": found.end_line, "source": "\n".join(lines[found.line - 1:found.end_line])[:MAX_CHARS]}
+
+
+def _symbol_help(index, relative, symbol):
+    module = index.modules.get(relative)
+    if module is None:
+        return f"{relative} is not an indexed Python module"
+    if module.error:
+        return f"{relative}: {module.error}"
+    names = ", ".join(s.qualname for s in module.symbols)[:800]
+    return f"{symbol!r} is not one unique symbol in {relative}. Symbols there: {names or 'none'}"
+
+
+# --- Git state (read-only; the private repository has no remotes) ---------
+
+
+def _repo(runtime):
+    if runtime.repo is None:
+        raise ValueError("Git state is not available in this run")
+    return runtime.repo
+
+
+def git_status(runtime):
+    return _repo(runtime).status()
+
+
+def git_diff(runtime, path=None):
+    relative = resolve_path(runtime, path)[1] if path else None
+    text = _repo(runtime).diff(relative)
+    result = {"diff": text[:MAX_DIFF_CHARS], "truncated": len(text) > MAX_DIFF_CHARS}
+    if result["truncated"]:
+        result["note"] = f"SHORTENED: only the first {MAX_DIFF_CHARS} characters are shown"
+    return result
+
+
+def git_log(runtime):
+    return {"commits": _repo(runtime).log()}
+
+
 # --- edit tools ----------------------------------------------------------
+
+
+def atomic_write(full, data, exclusive=False):
+    """Write through a temporary file, so a stop leaves the old or the new content, never a mix."""
+    descriptor, temporary = tempfile.mkstemp(prefix=".harness-tmp-", dir=full.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if exclusive:
+            os.chmod(temporary, 0o666 & ~_umask())
+            os.link(temporary, full)  # fails if the file appeared in the meantime
+        else:
+            os.chmod(temporary, full.stat().st_mode & 0o777)
+            os.replace(temporary, full)
+            temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
+
+
+def _umask():
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
+
+def replace_symbol(runtime, path, symbol, source):
+    """Replace one whole function, method, class or module variable; indentation is adjusted."""
+    full, relative = resolve_path(runtime, path, write=True)
+    if not full.is_file():
+        raise FileNotFoundError(f"{relative} is not a file")
+    if len(source.encode("utf-8")) > MAX_FILE_BYTES:
+        raise ValueError(f"source exceeds {MAX_FILE_BYTES} bytes")
+    index = _index(runtime)
+    found = index.symbol_at(relative, symbol)
+    if found is None:
+        raise ValueError(_symbol_help(index, relative, symbol))
+    original = index.modules[relative].text
+    lines = original.splitlines(keepends=True)
+    block = textwrap.indent(textwrap.dedent(source.strip("\n")), " " * found.col).rstrip() + "\n"
+    updated = "".join(lines[: found.line - 1]) + block + "".join(lines[found.end_line:])
+    if updated == original:
+        raise ValueError("source is identical to the current symbol; the edit would change nothing")
+    try:
+        compile(updated, relative, "exec")
+    except SyntaxError as exc:
+        raise ValueError(f"edit rejected, the result would not be valid Python: {exc.msg} at line {exc.lineno}. "
+                         "Give the complete definition of the symbol.") from None
+    data = updated.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise ValueError(f"edited file would exceed {MAX_FILE_BYTES} bytes")
+    atomic_write(full, data)
+    return {"path": relative, "symbol": found.qualname, "replaced_lines": [found.line, found.end_line],
+            "new_lines": block.count("\n")}
 
 
 def write_file(runtime, path, content):
@@ -135,11 +287,11 @@ def write_file(runtime, path, content):
     data = content.encode("utf-8")
     if len(data) > MAX_FILE_BYTES:
         raise ValueError(f"content exceeds {MAX_FILE_BYTES} bytes")
+    if full.exists():
+        raise FileExistsError(f"{relative} already exists; use edit_file")
     full.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # Mode "x" creates exclusively: it fails instead of overwriting.
-        with full.open("xb") as handle:
-            handle.write(data)
+        atomic_write(full, data, exclusive=True)
     except FileExistsError:
         raise FileExistsError(f"{relative} already exists; use edit_file") from None
     return {"path": relative, "bytes": len(data), "created": True}
@@ -184,7 +336,7 @@ def edit_file(runtime, path, old, new):
     data = updated.encode("utf-8")
     if len(data) > MAX_FILE_BYTES:
         raise ValueError(f"edited file would exceed {MAX_FILE_BYTES} bytes")
-    full.write_bytes(data)
+    atomic_write(full, data)
     start = updated.count("\n", 0, updated.index(new)) + 1 if new else None
     return {"path": relative, "replacements": 1, "bytes": len(data), "changed_from_line": start}
 

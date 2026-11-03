@@ -1,0 +1,150 @@
+{
+  "id": "api-feature-2",
+  "project": "allocation",
+  "task_name": "batch-expiry",
+  "task": {
+    "name": "cosmicpython/code",
+    "url": "https://github.com/cosmicpython/code.git",
+    "commit": "14c84797ffa77255d53cf1a02fe6aafda2b68aeb",
+    "request": "Feature request: optional expiry date for stock batches.\n\nSome stock can no longer be sold after a certain date. Add an optional expiry\ndate to batches, and stop allocating order lines to batches that have expired.\n\nAcceptance criteria:\n\n1. The CreateBatch command accepts an optional `expiry` date (default None). A\n   Batch has an `expiry` attribute with the same default. Every existing way of\n   creating them, without an expiry, must keep working unchanged.\n2. The expiry date is saved in the database with the batch. After loading a\n   batch again through a new unit of work, its `expiry` has the same value, or\n   None when no expiry was given.\n3. A batch with an expiry date in the past cannot allocate. A batch can still\n   allocate on its expiry date itself. Allocation skips expired batches and uses\n   the next suitable one. If only expired batches have stock, allocation behaves\n   as out of stock.\n4. Creating a batch with an invalid expiry must fail with a clear error:\n   add an exception class `InvalidExpiry` next to the existing `InvalidSku`, and\n   raise it, naming the batch reference in the message, when the expiry is not a\n   date, or when it is earlier than the batch's eta. Nothing may be saved then.\n   An expiry equal to the eta is valid.\n\nFind the modules this involves yourself. Do not change tests or files outside\nsrc/allocation/. When you think the change is complete, reply with final. The\nharness then runs the checks and tells you about any failure.",
+    "acceptance_dir": "/home/fede/Desktop/facultad/UASTW/ai-dev/stage 2/task/feature-expiry/acceptance",
+    "writable": [
+      "src/allocation/*.py",
+      "src/allocation/**/*.py"
+    ],
+    "protected": [
+      "tests/**",
+      "src/setup.py",
+      "requirements.txt",
+      "Dockerfile",
+      "docker-compose.yml"
+    ],
+    "checks": {
+      "compile": {
+        "description": "Every module under src/ compiles (build check; writes nothing)",
+        "argv": [
+          "python",
+          "-c",
+          "import pathlib, sys\nbad = 0\nfor p in sorted(pathlib.Path('src').rglob('*.py')):\n    try:\n        compile(p.read_text(), str(p), 'exec')\n    except SyntaxError as e:\n        print(e); bad = 1\nprint('compiled' if not bad else 'syntax errors found')\nsys.exit(bad)"
+        ],
+        "needs_acceptance": false,
+        "agent_visible": true,
+        "tool_module": ""
+      },
+      "lint": {
+        "description": "Ruff: syntax errors, undefined names and misused constructs in src/allocation",
+        "argv": [
+          "python",
+          "-m",
+          "ruff",
+          "check",
+          "--no-cache",
+          "--output-format",
+          "concise",
+          "--select",
+          "E9,F63,F7,F82",
+          "src/allocation"
+        ],
+        "needs_acceptance": false,
+        "agent_visible": true,
+        "tool_module": "ruff"
+      },
+      "regression": {
+        "description": "Existing unit and integration tests (pristine copies of tests/)",
+        "argv": [
+          "python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "tests/unit",
+          "tests/integration",
+          "-k",
+          "not test_out_of_stock_email and not test_concurrent_updates_to_version_are_not_allowed"
+        ],
+        "needs_acceptance": false,
+        "agent_visible": true,
+        "tool_module": ""
+      },
+      "feature": {
+        "description": "Protected feature tests: expiry rules, persistence, invalid values, existing callers",
+        "argv": [
+          "python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "--rootdir",
+          "/acceptance",
+          "/acceptance/feature"
+        ],
+        "needs_acceptance": true,
+        "agent_visible": true,
+        "tool_module": ""
+      },
+      "acceptance": {
+        "description": "All acceptance tests, including held-out cases the agent never sees",
+        "argv": [
+          "python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "--rootdir",
+          "/acceptance",
+          "/acceptance"
+        ],
+        "needs_acceptance": true,
+        "agent_visible": false,
+        "tool_module": ""
+      }
+    }
+  },
+  "status": "completed",
+  "created": 1793710867.0809813,
+  "updated": 1793710930.4655316,
+  "mode": "edit",
+  "tools": null,
+  "limits": {
+    "max_actions": 40,
+    "max_denied": 5,
+    "max_invalid_replies": 4,
+    "max_model_retries": 2,
+    "observation_chars": 8000,
+    "max_fix_rounds": 3
+  },
+  "context": {
+    "max_chars": 36000,
+    "target_chars": 28000,
+    "map_chars": 3500,
+    "file_chars": 3500,
+    "max_selected_files": 5,
+    "summary_chars": 3000,
+    "min_recent_turns": 4,
+    "failure_chars": 2500
+  },
+  "model": {
+    "provider": "openai",
+    "name": "Qwen/Qwen3.6-35B-A3B",
+    "endpoint": "http://127.0.0.1:11434/api/chat",
+    "timeout_s": 600,
+    "num_ctx": 16384,
+    "temperature": 0,
+    "max_output_tokens": 4096,
+    "think": false,
+    "api_key_env": "OPENAI_API_KEY",
+    "base_url_env": "OPENAI_BASE_URL"
+  },
+  "script": null,
+  "acceptance_digest": "80d713a6be2338d3f5fadbef778d1534877e9bf94628e264ffabf47f2ee68f69",
+  "baseline_tree": "f24817913584de1ebec91ad1aae537d550bf91b5",
+  "termination": "checks_passed",
+  "verdict": "passed",
+  "pause_reasons": [],
+  "pid": 263806,
+  "reason": "the model finished and every visible check passed",
+  "final_claim": "Added optional expiry date to stock batches. Changes: 1) model.py: Batch now accepts expiry parameter, can_allocate() skips expired batches (expiry < today), __gt__ sorts by expiry after eta. 2) commands.py: CreateBatch accepts optional expiry date. 3) handlers.py: Added InvalidExpiry exception, validates expiry is a date and not before eta. 4) orm.py: Added expiry column to batches table mapping. All compile, lint, regression, and feature tests pass."
+}

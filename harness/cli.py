@@ -1,8 +1,22 @@
-"""Command-line interface: submit a task, show progress and the verified result.
+"""Command-line interface. Interface code only: the work happens in harness.service.
+
+    python -m harness                    interactive shell
+    python -m harness projects           list allowed projects and tasks
+    python -m harness ping               check the connection to the configured model
+    python -m harness start              start a session on the selected project and task
+    python -m harness sessions           list saved sessions
+    python -m harness status ID          show progress, steps and errors
+    python -m harness cancel ID          stop a run active in another terminal
+    python -m harness resume ID          re-validate a session and continue it, or pause and say why
+    python -m harness review ID          changed files, final diff, checks, unfinished work
+    python -m harness check ID           run every check again on a session
+    python -m harness delete ID          remove a saved session
+
+Stage 1 commands still work:
 
     python -m harness prepare            clone the target at its pinned commit, build the sandbox image
     python -m harness baseline           run every check on the untouched starting code
-    python -m harness run                run the agent on task/request.md, then verify
+    python -m harness run                single run on a task without a saved session
     python -m harness verify RUN_DIR     re-run verification on an earlier run
 """
 
@@ -15,12 +29,20 @@ import time
 from pathlib import Path
 
 from . import config
+from .cancel import CancelToken
 from .context import build_context
 from .controller import AgentController
-from .model import OllamaModel, ScriptedModel
+from .gitstate import GitError
+from .model import ModelError, ScriptedModel, create_model
 from .registry import REGISTRY
 from .runtime import Runtime
 from .sandbox import DockerSandbox, SandboxUnavailable
+from .service import HarnessService
+from .session import SessionError, SessionStore
+from .ui.keys import CancelKeys
+from .ui.render import ConsoleRenderer, as_json
+from .ui.shell import Shell
+from .ui.theme import clean
 from .verification import PASSED, summary_line, verify
 from .workspace import WorkspaceError, create_run, prepare_vendor
 
@@ -193,15 +215,15 @@ def cmd_baseline(args, settings, task):
 def cmd_run(args, settings, task):
     if args.max_actions:
         settings = config.Settings(settings.model, config.Limits(**{**vars(settings.limits),
-                                   "max_actions": args.max_actions}), settings.sandbox, settings.source)
+                                   "max_actions": args.max_actions}), settings.sandbox, settings.source, settings.context)
     if args.model_name:
         settings = config.Settings(config.ModelSettings(**{**vars(settings.model), "name": args.model_name}),
-                                   settings.limits, settings.sandbox, settings.source)
+                                   settings.limits, settings.sandbox, settings.source, settings.context)
     if args.script:
         model = ScriptedModel(json.loads(Path(args.script).read_text(encoding="utf-8")))
         model_label = f"scripted ({args.script})"
     else:
-        model = OllamaModel(settings.model)
+        model = create_model(settings.model)
         model_label = f"{settings.model.provider}:{settings.model.name}"
 
     run_id, run_dir = create_run(task, config.RUNS_DIR, label=args.label)
@@ -259,16 +281,212 @@ def cmd_verify(args, settings, task):
     return 0 if report["verdict"] == PASSED else 1
 
 
+# --- sessions ---------------------------------------------------------------
+
+EXIT_OK, EXIT_NOT_VERIFIED, EXIT_ERROR, EXIT_PAUSED, EXIT_CANCELLED = 0, 1, 2, 3, 130
+
+
+class Application:
+    """Connects the service to the renderer and to the cancel keys."""
+
+    def __init__(self, settings, registry, store, renderer=None):
+        self.settings = settings
+        self.renderer = renderer or ConsoleRenderer()
+        self.service = HarnessService(settings, registry, store, emit=self.renderer)
+
+    def model_label(self):
+        return f"{self.settings.model.provider}:{self.settings.model.name}"
+
+    def _run_with_keys(self, work):
+        token = CancelToken()
+        with CancelKeys(token, on_cancel=self.renderer.cancel_requested):
+            return work(token)
+
+    def _finish(self, session_id, outcome):
+        self.renderer.show_review(self.service.review(session_id))
+        status = self.service.inspect(session_id)["status"]
+        if status == "cancelled":
+            self.renderer.print(self.renderer.p(f"Saved. Continue with: python -m harness resume {session_id}", "muted"))
+            return EXIT_CANCELLED
+        if status == "paused":
+            return EXIT_PAUSED
+        return EXIT_OK if outcome["report"]["verdict"] == PASSED else EXIT_NOT_VERIFIED
+
+    def run_session(self, session):
+        outcome = self._run_with_keys(lambda token: self.service.run(session, cancel=token))
+        return self._finish(session.id, outcome)
+
+    def resume_session(self, session_id, **options):
+        result = self._run_with_keys(lambda token: self.service.resume(session_id, cancel=token, **options))
+        if not result.started:
+            return EXIT_PAUSED
+        return self._finish(result.session.id, result.outcome)
+
+    def verify_session(self, session_id):
+        report = self._run_with_keys(lambda token: self.service.verify(session_id, cancel=token))
+        self.renderer.show_review(self.service.review(session_id), with_diff=False)
+        return EXIT_OK if report["verdict"] == PASSED else EXIT_NOT_VERIFIED
+
+
+def make_application(args, settings):
+    registry = config.ProjectRegistry.load(args.projects)
+    return Application(settings, registry, SessionStore(args.sessions_dir))
+
+
+def cmd_ping(_args, settings, _task):
+    """Check the model connection with one small request. The key is never printed."""
+    model = create_model(settings.model)
+    started = time.monotonic()
+    reply = model([{"role": "user", "content": 'Reply with exactly this JSON object: {"final": "ok"}'}])
+    print(f"model {settings.model.provider}:{settings.model.name} answered in {time.monotonic() - started:.1f}s")
+    print(clean(reply)[:300])
+    return EXIT_OK
+
+
+def cmd_shell(args, settings, _task):
+    return Shell(make_application(args, settings)).run()
+
+
+def cmd_projects(args, settings, _task):
+    app = make_application(args, settings)
+    app.renderer.show_projects(app.service.registry.projects.values())
+    return EXIT_OK
+
+
+def cmd_start(args, settings, _task):
+    app = make_application(args, settings)
+    limits = settings.limits
+    if args.max_actions:
+        limits = config.Limits(**{**vars(limits), "max_actions": args.max_actions})
+    enabled = {name.strip() for name in args.tools.split(",") if name.strip()} if args.tools else None
+    project = args.project or next(iter(sorted(app.service.registry.projects)), None)
+    if project is None:
+        raise SessionError("no projects are allowed; see projects.toml")
+    session = app.service.create_session(project, args.task, request=args.request, request_file=args.request_file,
+                                         model_name=args.model_name, script=args.script, mode=args.mode, tools=enabled,
+                                         label=args.label, limits=limits)
+    if args.no_run:
+        print(session.id)
+        return EXIT_OK
+    return app.run_session(session)
+
+
+def cmd_sessions(args, settings, _task):
+    app = make_application(args, settings)
+    if args.json:
+        print(as_json(app.service.session_summaries()))
+    else:
+        app.renderer.show_sessions(app.service.session_summaries())
+    return EXIT_OK
+
+
+def cmd_status(args, settings, _task):
+    app = make_application(args, settings)
+    info = app.service.inspect(args.session)
+    if args.json:
+        print(as_json(info))
+    else:
+        app.renderer.show_status(info)
+    return EXIT_OK
+
+
+def cmd_cancel(args, settings, _task):
+    app = make_application(args, settings)
+    session = app.service.cancel(args.session)
+    app.renderer.print(app.renderer.p(f"cancellation requested for {session.id}", "yellow"))
+    return EXIT_OK
+
+
+def cmd_resume(args, settings, _task):
+    app = make_application(args, settings)
+    return app.resume_session(args.session, accept=args.accept, restore=args.restore, extra_actions=args.extra_actions,
+                              extra_fix_rounds=args.extra_fix_rounds, model_name=args.model_name)
+
+
+def cmd_review(args, settings, _task):
+    app = make_application(args, settings)
+    review = app.service.review(args.session)
+    if args.json:
+        print(as_json(review))
+    else:
+        app.renderer.show_review(review, with_diff=not args.no_diff)
+    return EXIT_OK if review["verdict"] == PASSED else EXIT_NOT_VERIFIED
+
+
+def cmd_check(args, settings, _task):
+    return make_application(args, settings).verify_session(args.session)
+
+
+def cmd_delete(args, settings, _task):
+    app = make_application(args, settings)
+    app.renderer.print(f"deleted {app.service.delete(args.session)}")
+    return EXIT_OK
+
+
+SESSION_COMMANDS = {"ping": cmd_ping, "shell": cmd_shell, "projects": cmd_projects, "start": cmd_start, "sessions": cmd_sessions,
+                    "status": cmd_status, "cancel": cmd_cancel, "resume": cmd_resume, "review": cmd_review,
+                    "check": cmd_check, "delete": cmd_delete}
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="python -m harness", description="Stage 1 coding harness")
+    parser = argparse.ArgumentParser(prog="python -m harness", description="A capable coding harness")
     parser.add_argument("--settings", help="settings TOML (default: settings.toml or settings.example.toml)")
-    parser.add_argument("--target", default=str(config.DEFAULT_TARGET), help="task/target TOML")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--target", default=str(config.DEFAULT_TARGET), help="task/target TOML (Stage 1 commands)")
+    parser.add_argument("--projects", default=str(config.PROJECTS_FILE), help="allow-list of projects")
+    parser.add_argument("--sessions-dir", default=str(config.SESSIONS_DIR), help="where sessions are saved")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("shell", help="interactive shell (default when no command is given)")
+    sub.add_parser("projects", help="list allowed projects and tasks")
+    sub.add_parser("ping", help="check the connection to the configured model")
+
+    start = sub.add_parser("start", help="start a session on an allowed project")
+    start.add_argument("--project", help="allowed project (default: the first one)")
+    start.add_argument("--task", help="task of the project (default: its default task)")
+    start.add_argument("--request", help="request text (default: the task's saved request)")
+    start.add_argument("--request-file", help="file with the request text")
+    start.add_argument("--script", help="JSON list of scripted model replies instead of a real model")
+    start.add_argument("--model", dest="model_name", help="model name (overrides settings)")
+    start.add_argument("--mode", choices=("read-only", "edit"), default="edit")
+    start.add_argument("--tools", help="comma-separated enabled tools (default: all)")
+    start.add_argument("--max-actions", type=int, help="override limits.max_actions")
+    start.add_argument("--label", help="session id (default: generated)")
+    start.add_argument("--no-run", action="store_true", help="only create and save the session")
+
+    sessions = sub.add_parser("sessions", help="list saved sessions")
+    sessions.add_argument("--json", action="store_true")
+
+    status = sub.add_parser("status", help="show progress, steps and errors of a session")
+    status.add_argument("session")
+    status.add_argument("--json", action="store_true")
+
+    cancel = sub.add_parser("cancel", help="stop a run active in another terminal")
+    cancel.add_argument("session")
+
+    resume = sub.add_parser("resume", help="re-validate a session and continue it, or pause and say why")
+    resume.add_argument("session")
+    decision = resume.add_mutually_exclusive_group()
+    decision.add_argument("--accept", action="store_true", help="keep the current working copy; nothing is replayed")
+    decision.add_argument("--restore", action="store_true", help="return the working copy to the last checkpoint")
+    resume.add_argument("--extra-actions", type=int, default=0, help="grant more actions, on top of those consumed")
+    resume.add_argument("--extra-fix-rounds", type=int, default=0, help="grant more fix rounds")
+    resume.add_argument("--model", dest="model_name", help="continue with another model")
+
+    review = sub.add_parser("review", help="changed files, final diff, checks and unfinished work")
+    review.add_argument("session")
+    review.add_argument("--no-diff", action="store_true")
+    review.add_argument("--json", action="store_true")
+
+    check = sub.add_parser("check", help="run every check again on a session")
+    check.add_argument("session")
+
+    delete = sub.add_parser("delete", help="remove a saved session")
+    delete.add_argument("session")
 
     sub.add_parser("prepare", help="clone the target at its pinned commit and build the sandbox image")
     sub.add_parser("baseline", help="run all checks on the untouched starting code")
 
-    run = sub.add_parser("run", help="run the agent on the task and verify the result")
+    run = sub.add_parser("run", help="single run without a saved session (Stage 1)")
     run.add_argument("--task-file", help="request text (default: from target TOML)")
     run.add_argument("--script", help="JSON list of scripted model replies instead of Ollama")
     run.add_argument("--model", dest="model_name", help="Ollama model name (overrides settings)")
@@ -283,15 +501,24 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        if not sys.stdin.isatty():
+            parser.print_help()
+            return EXIT_ERROR
+        args.command = "shell"
     try:
+        config.load_env_file()
         settings = config.load_settings(args.settings)
+        if args.command in SESSION_COMMANDS:
+            return SESSION_COMMANDS[args.command](args, settings, None)
         task = config.load_task(args.target, getattr(args, "task_file", None))
         handler = {"prepare": cmd_prepare, "baseline": cmd_baseline, "run": cmd_run, "verify": cmd_verify}
         return handler[args.command](args, settings, task)
-    except (WorkspaceError, FileNotFoundError, ValueError, subprocess.CalledProcessError) as exc:
+    except (WorkspaceError, SessionError, GitError, ModelError, FileNotFoundError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_ERROR
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
-        return 130
+        return EXIT_CANCELLED

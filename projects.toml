@@ -1,0 +1,12 @@
+# Allow-list of projects the harness may work on. A project or task that is not
+# listed here cannot be selected, and each task must target the listed commit.
+
+[projects.allocation]
+description = "Allocation service from Architecture Patterns with Python (cosmicpython/code)"
+url = "https://github.com/cosmicpython/code.git"
+commit = "14c84797ffa77255d53cf1a02fe6aafda2b68aeb"
+default_task = "batch-expiry"
+
+[projects.allocation.tasks]
+batch-expiry = "task/feature-expiry/target.toml"   # Stage 2 feature
+idempotent-allocation = "task/target.toml"         # Stage 1 bug fix

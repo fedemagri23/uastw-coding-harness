@@ -1,0 +1,27 @@
+# Example for an OpenAI-compatible service. Copy to settings.toml.
+# The key and the base URL come from the environment or from .env (see .env.example).
+
+[model]
+provider = "openai"
+name = "Qwen/Qwen3.6-35B-A3B"
+base_url_env = "OPENAI_BASE_URL"
+api_key_env = "OPENAI_API_KEY"
+timeout_s = 600
+temperature = 0
+max_output_tokens = 4096
+
+[limits]
+max_actions = 40
+max_denied = 5
+max_invalid_replies = 4
+max_model_retries = 2
+observation_chars = 8000
+max_fix_rounds = 3
+
+[sandbox]
+image = "stage2-sandbox:py312"
+command_timeout_s = 120
+output_bytes = 16000
+memory = "1g"
+cpus = "2"
+pids = 256

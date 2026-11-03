@@ -1,129 +1,101 @@
-# Demo video script (about 2 minutes)
+# Demo video script (at most 4 minutes)
 
-The video has six segments. Segment 3 (the real model run) is recorded live
-but takes about 3–4 minutes on CPU, so you cut the waiting in editing. Every
-other segment is real time.
+Timings add up to about 3:50. Everything shown is real. The API run takes about a
+minute, so it fits live, though you can shorten the wait when editing.
 
 ## Before recording (not on camera)
 
-Run these once, in a terminal:
-
 ```bash
-cd ~/Desktop/facultad/UASTW/ai-dev/stage1
-
-# 1. Ollama must be running and the model present
-ollama list                       # must show qwen2.5-coder:7b
-# if Ollama is not running:  ollama serve   (in another terminal)
-
-# 2. Target cloned + sandbox image built (no downloads on camera)
-python3 -m harness prepare
-
-# 3. Warm up the model so the first call is not extra slow
-ollama run qwen2.5-coder:7b "hi" > /dev/null
-
-# 4. Clean terminal for recording
+cd ~/Desktop/facultad/UASTW/ai-dev/"stage 2"
+python3 -m harness prepare          # target and sandbox image ready
+python3 -m harness ping             # VPN on, key in .env, model answers
+chmod -R u+w sessions-demo 2>/dev/null; rm -rf sessions-demo
+python3 -m harness delete video 2>/dev/null
 clear
 ```
 
-Recording setup:
-- One terminal with a large font (Ctrl + to zoom), maximized.
-- VS Code (or a browser on GitHub) open on `README.md` in preview mode, to
-  show the diagrams: in VS Code, open `README.md` and press `Ctrl+Shift+V`.
-- Screen recorder: OBS, or GNOME's built-in recorder (`Ctrl+Shift+Alt+R`).
+Use a maximized terminal with a large font. Open `README.md` in preview
+(`Ctrl+Shift+V` in VS Code) for the diagrams. Do not show `.env` on screen.
 
----
+## 1. 0:00–0:25 What it is
 
-## Segment 1 — 0:00–0:20 — What it is
+**Show:** README, the architecture diagram.
 
-**Show:** `README.md` preview, scrolled to the **Architecture** diagram.
+> "This is Stage 2 of my coding harness, in Python with no agent framework. It extends
+> Stage 1 with repository navigation, a bounded context, an edit-test-fix loop and
+> saved sessions. The interface is separate from the core: this service layer is used
+> by the command line, the shell and the tests."
 
-**Say:**
-> "This is my Stage 1 coding harness. A local model in Ollama proposes
-> actions. The harness checks every request in code, edits a disposable copy
-> of the repository, runs tests in a Docker sandbox, and verifies the result
-> itself."
+## 2. 0:25–0:50 Project, feature and failing start
 
-## Segment 2 — 0:20–0:40 — Target and failing baseline
-
-**Do (terminal):**
 ```bash
-cat task/request.md | head -12
-python3 -m harness baseline
+python3 -m harness
 ```
-After `baseline` finishes (about 10 s), scroll up a little so the
-**Checks** table is visible (regression PASSED, acceptance FAILED).
+Then in the shell: `/projects`. Show `task/feature-expiry/request.md` in the editor.
 
-**Say:**
-> "The target is Cosmic Python at a pinned commit. The bug: allocating the
-> same order line twice reserves stock again. On the starting code, the
-> hidden acceptance check fails, 4 of 6, and the 26 existing tests pass."
+> "I can only select projects on this allow-list. The feature is an optional expiry
+> date for stock batches. It crosses the command, the domain model, the handler and the
+> database mapping, keeps existing callers working, and rejects invalid values. The
+> request names no file. At the starting commit, the protected feature check fails and
+> the 26 regression tests pass. The checks are outside the agent's writable area."
 
-## Segment 3 — 0:40–1:15 — Real model run (cut the waiting)
+## 3. 0:50–2:00 Real run
 
-**Do (terminal):**
+In the shell, type `/new`. Let it run; cut the wait if needed.
+
+**Point at:** the selected files, the spinner's action and context counters, a
+`Context compacted` line, an edit preview, and a failed `Check(feature)` followed by a
+fix.
+
+> "The harness picked these files itself, and builds a map from the Python syntax tree.
+> Each prompt stays under 36,000 characters. When it compacts, the task contract stays
+> word for word, and repository text stays marked as untrusted. Here a check failed,
+> and the model used that failure to fix its code. This model runs through a course
+> API, because my local model was too slow on CPU."
+
+## 4. 2:00–2:25 Review
+
+**Show:** the result panel and the diff.
+
+> "The model's claim is labelled unverified. The verdict comes only from checks the
+> harness runs in a Docker sandbox with no network, including held-out tests the agent
+> never saw. I gave no manual help in this run."
+
+## 5. 2:25–3:30 Cancel and safe resume
+
+Use a second terminal. In the first:
 ```bash
-clear
-python3 -m harness run --task-file task/request-guided.md --label video
+python3 -m harness start --label video
 ```
-Leave it running. It prints `[action N] asking the model...` and waits
-20–150 s per call. **In editing, cut every wait** and keep only:
-1. The first lines (target, model, sandbox, the task).
-2. Each `request:` line and its `OK` result.
-3. The final report: **Diff**, the **Checks** table and **Verdict: PASSED**.
-
-If the run does not end with PASSED (the model is not fully deterministic),
-run it again with another label (`--label video2`), or use the saved run
-instead: `cat docs/evidence/run3-guided.log`.
-
-**Say** (over the report):
-> "A real run with qwen2.5-coder 7B. The model edits `model.py` and runs the
-> regression check in the sandbox. Then the harness ignores the model's claim
-> and re-runs scope, regression and the hidden acceptance check itself. Here
-> is the diff, and all checks pass. Manual help: the 7B model needed a hint
-> in the request about where the check goes."
-
-## Segment 4 — 1:15–1:35 — The model's claim is not evidence
-
-**Do (terminal):**
+After the first `Update` appears, in the second:
 ```bash
-clear
-sed -n '/Model claim/,/--- output of/p' docs/evidence/run2-unguided.log
-grep "^Verdict" docs/evidence/run2-unguided.log
+python3 -m harness cancel video
+docker ps --filter label=harness.run=video
+echo "# edited by hand" >> sessions/video/workspace/README.md
+python3 -m harness resume video
 ```
-
-**Say:**
-> "Without the hint, the model made an edit that does nothing (both
-> branches return the same value) and said the change was complete. The
-> regression tests pass, but the harness reports the acceptance check as
-> failed: NOT VERIFIED."
-
-## Segment 5 — 1:35–1:55 — Tests and safety
-
-**Do (terminal):**
+**Point at:** the paused panel, then run:
 ```bash
-clear
-python3 -m unittest discover -s tests -t .
+python3 -m harness resume video --restore
 ```
-It takes about 25 s and ends with `Ran 59 tests ... OK`. Cut the middle if
-you need to. Then switch to the `README.md` preview, **Safety controls**
-table.
 
-**Say:**
-> "59 automated tests with scripted model replies, no API key needed. Safety
-> lives in code: paths are confined to the copy, and containers have no
-> network, no host environment and a read-only workspace. Stuck commands are
-> killed, and actions and denials are limited."
+> "Cancelling closes the model connection or kills the command, and no containers stay
+> behind. The session is saved. Now I change a file by hand. Resume compares the working
+> copy with the checkpoint, including the harness's own edits, and pauses without running
+> anything. I decide: restore. It continues with the limits it had already consumed. An
+> action interrupted by a crash is marked uncertain and is never replayed."
 
-## Segment 6 — 1:55–2:00 — Close
+## 6. 3:30–3:50 Tests and limits
 
-**Say:**
-> "Thanks."
-
----
-
-## After recording (optional)
-
-Remove the extra run directories created on camera:
 ```bash
-chmod -R u+w runs/video* && rm -rf runs/video*
+python3 -m unittest discover -s tests -t . 2>&1 | tail -3
 ```
+
+> "All Stage 1 and Stage 2 tests pass without a model or API key. Known limits are in the
+> README: navigation is Python only, the local model never finished this feature, and
+> a harness-driven fix round has been verified with scripted replies, since the real
+> model ran the checks itself."
+
+## Manual help to state
+
+None during the verified feature run. The hand edit in segment 5 is a deliberate test.

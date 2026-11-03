@@ -1,0 +1,78 @@
+{
+  "changes": [
+    {
+      "path": "src/allocation/adapters/orm.py",
+      "change": "modified"
+    },
+    {
+      "path": "src/allocation/domain/commands.py",
+      "change": "modified"
+    },
+    {
+      "path": "src/allocation/domain/model.py",
+      "change": "modified"
+    }
+  ],
+  "checks": [
+    {
+      "name": "scope",
+      "description": "Only files inside the writable scope changed",
+      "status": "passed",
+      "output": "3 changed file(s), all inside the writable scope"
+    },
+    {
+      "name": "compile",
+      "description": "Every module under src/ compiles (build check; writes nothing)",
+      "status": "not_run",
+      "output": "not run: the session stopped with cancelled; use verify or resume to check it",
+      "exit_code": null
+    },
+    {
+      "name": "lint",
+      "description": "Ruff: syntax errors, undefined names and misused constructs in src/allocation",
+      "status": "not_run",
+      "output": "not run: the session stopped with cancelled; use verify or resume to check it",
+      "exit_code": null
+    },
+    {
+      "name": "regression",
+      "description": "Existing unit and integration tests (pristine copies of tests/)",
+      "status": "not_run",
+      "output": "not run: the session stopped with cancelled; use verify or resume to check it",
+      "exit_code": null
+    },
+    {
+      "name": "feature",
+      "description": "Protected feature tests: expiry rules, persistence, invalid values, existing callers",
+      "status": "not_run",
+      "output": "not run: the session stopped with cancelled; use verify or resume to check it",
+      "exit_code": null
+    },
+    {
+      "name": "acceptance",
+      "description": "All acceptance tests, including held-out cases the agent never sees",
+      "status": "not_run",
+      "output": "not run: the session stopped with cancelled; use verify or resume to check it",
+      "exit_code": null
+    }
+  ],
+  "verdict": "not verified",
+  "outcome": {
+    "termination": "cancelled",
+    "reason": "cancelled by the user",
+    "final": null,
+    "counters": {
+      "actions": 7,
+      "executed": 7,
+      "denied": 0,
+      "errors": 0,
+      "invalid_replies": 0,
+      "blocked_repeats": 0,
+      "model_calls": 8,
+      "model_retries": 0,
+      "fix_rounds": 0,
+      "check_rounds": 0
+    }
+  },
+  "agent_commands": []
+}

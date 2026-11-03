@@ -1,0 +1,70 @@
+--- a/src/allocation/adapters/orm.py
++++ b/src/allocation/adapters/orm.py
+@@ -41,6 +41,7 @@
+     Column("sku", ForeignKey("products.sku")),
+     Column("_purchased_quantity", Integer, nullable=False),
+     Column("eta", Date, nullable=True),
++    Column("expiry", Date, nullable=True),
+ )
+ 
+ allocations = Table(
+--- a/src/allocation/domain/commands.py
++++ b/src/allocation/domain/commands.py
+@@ -21,6 +21,25 @@
+     sku: str
+     qty: int
+     eta: Optional[date] = None
++    expiry: Optional[date] = None
++
++    @property
++    def eta(self) -> Optional[date]:
++        return self._eta
++
++    @eta.setter
++    def eta(self, value: Optional[date]):
++        self._eta = value
++
++    @property
++    def expiry(self) -> Optional[date]:
++        return self._expiry
++
++    @expiry.setter
++    def expiry(self, value: Optional[date]):
++        if value is not None and value < date.today():
++            raise InvalidExpiry(f"Expiry date {value} is in the past for batch {self.ref}")
++        self._expiry = value
+ 
+ 
+ @dataclass
+--- a/src/allocation/domain/model.py
++++ b/src/allocation/domain/model.py
+@@ -4,6 +4,9 @@
+ from typing import Optional, List, Set
+ from . import commands, events
+ 
++
++class InvalidExpiry(Exception):
++    pass
+ 
+ class Product:
+     def __init__(self, sku: str, batches: List[Batch], version_number: int = 0):
+@@ -46,10 +49,11 @@
+ 
+ 
+ class Batch:
+-    def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date]):
++    def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date], expiry: Optional[date] = None):
+         self.reference = ref
+         self.sku = sku
+         self.eta = eta
++        self.expiry = expiry
+         self._purchased_quantity = qty
+         self._allocations = set()  # type: Set[OrderLine]
+ 
+@@ -87,4 +91,6 @@
+         return self._purchased_quantity - self.allocated_quantity
+ 
+     def can_allocate(self, line: OrderLine) -> bool:
++        if self.expiry and self.expiry < date.today():
++            return False
+         return self.sku == line.sku and self.available_quantity >= line.qty

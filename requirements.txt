@@ -1,11 +1,11 @@
-# The harness itself uses only the Python standard library (Python >= 3.11,
-# for tomllib). Nothing to pip install on the host.
+# The harness uses only the Python standard library (Python >= 3.11, for tomllib).
+# There is nothing to pip install on the host.
 #
 # External requirements:
 #   - Docker (runs the target's code and tests in the sandbox)
-#   - Git (clones the target repository once)
-#   - Ollama with a local model, e.g. `ollama pull qwen2.5-coder:7b`
+#   - Git (clones the target once; private session state)
+#   - Ollama with a local model, e.g. `ollama pull qwen3:8b`
 #     (only for real runs; the automated tests use scripted model replies)
 #
-# The target repository's own dependencies are installed inside the sandbox
-# image, see sandbox/requirements-target.txt.
+# The target repository's dependencies and Ruff are installed inside the sandbox
+# image; see sandbox/requirements-target.txt.

@@ -1,24 +1,43 @@
-# Example settings for the Stage 1 coding harness. No secrets are needed:
-# the model runs locally in Ollama. Copy to settings.toml to change values;
-# without settings.toml these defaults are used.
+# Example settings for the coding harness. No secrets are needed: the model runs
+# locally in Ollama. Copy to settings.toml to change values; without settings.toml
+# these defaults are used.
 
 [model]
 provider = "ollama"
-name = "qwen2.5-coder:7b"
+name = "qwen3:8b"
 endpoint = "http://127.0.0.1:11434/api/chat"
-timeout_s = 300            # per model request; CPU-only machines are slow
-num_ctx = 16384            # context window requested from Ollama
+timeout_s = 900            # per model request; CPU-only machines are slow
+num_ctx = 16384            # context window requested from Ollama (tokens)
 temperature = 0
+max_output_tokens = 2048   # longest single reply
+think = false              # thinking-capable Ollama models answer directly
+# Any OpenAI-compatible service also works. The key is read from the named
+# environment variable; never write a key in this file.
+#   provider = "openai"
+#   name = "your-model"
+#   endpoint = "https://example.com/v1/chat/completions"
+#   api_key_env = "MODEL_API_KEY"
 
 [limits]
-max_actions = 20           # tool requests per run (executed, denied or blocked)
+max_actions = 40           # tool requests per run (executed, denied or blocked)
 max_denied = 5             # denied requests before the run stops
 max_invalid_replies = 4    # unparseable / malformed model replies before the run stops
 max_model_retries = 2      # extra attempts when a model request fails
 observation_chars = 8000   # cap on one tool result sent back to the model
+max_fix_rounds = 3         # failed check rounds returned to the model before stopping
+
+[context]
+max_chars = 36000          # hard limit for one whole prompt (about 9000 tokens at 4 chars/token)
+target_chars = 28000       # compaction shrinks to this, so it does not run on every turn
+map_chars = 3500           # repository map
+file_chars = 3500          # one selected file
+max_selected_files = 5     # files included in the first prompt
+summary_chars = 3000       # summary of older steps
+min_recent_turns = 4       # newest turns kept word for word as long as they fit
+failure_chars = 2500       # failed-check extract returned to the model
 
 [sandbox]
-image = "stage1-sandbox:py312"
+image = "stage2-sandbox:py312"
 command_timeout_s = 120    # a command still running after this is killed
 output_bytes = 16000       # captured output per command (head + tail kept)
 memory = "1g"

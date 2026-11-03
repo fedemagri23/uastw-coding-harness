@@ -1,0 +1,38 @@
+# Stage 2 feature task. The acceptance checks live outside the workspace and are
+# mounted read-only into the sandbox only while a check runs.
+
+[target]
+name = "cosmicpython/code"
+url = "https://github.com/cosmicpython/code.git"
+commit = "14c84797ffa77255d53cf1a02fe6aafda2b68aeb"   # master, 2025-06-10
+
+[task]
+request_file = "request.md"
+acceptance_dir = "acceptance"
+writable = ["src/allocation/*.py", "src/allocation/**/*.py"]
+protected = ["tests/**", "src/setup.py", "requirements.txt", "Dockerfile", "docker-compose.yml"]
+
+[checks.compile]
+description = "Every module under src/ compiles (build check; writes nothing)"
+argv = ["python", "-c", "import pathlib, sys\nbad = 0\nfor p in sorted(pathlib.Path('src').rglob('*.py')):\n    try:\n        compile(p.read_text(), str(p), 'exec')\n    except SyntaxError as e:\n        print(e); bad = 1\nprint('compiled' if not bad else 'syntax errors found')\nsys.exit(bad)"]
+
+[checks.lint]
+description = "Ruff: syntax errors, undefined names and misused constructs in src/allocation"
+argv = ["python", "-m", "ruff", "check", "--no-cache", "--output-format", "concise", "--select", "E9,F63,F7,F82", "src/allocation"]
+tool_module = "ruff"
+
+[checks.regression]
+description = "Existing unit and integration tests (pristine copies of tests/)"
+argv = ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/unit", "tests/integration",
+        "-k", "not test_out_of_stock_email and not test_concurrent_updates_to_version_are_not_allowed"]
+
+[checks.feature]
+description = "Protected feature tests: expiry rules, persistence, invalid values, existing callers"
+argv = ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", "/acceptance", "/acceptance/feature"]
+needs_acceptance = true
+agent_visible = true
+
+[checks.acceptance]
+description = "All acceptance tests, including held-out cases the agent never sees"
+argv = ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", "/acceptance", "/acceptance"]
+needs_acceptance = true

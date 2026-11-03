@@ -1,0 +1,209 @@
+● Session qwen-feature-2 created
+  ⎿ selected src/allocation/service_layer/handlers.py  (allocat, allocate, batch, command)
+  ⎿ selected src/allocation/domain/model.py  (allocat, allocate, batch, line)
+  ⎿ selected src/allocation/domain/commands.py  (allocate, batch, command, create)
+  ⎿ selected src/allocation/adapters/orm.py  (batch, line, load, order)
+  ⎿ selected src/allocation/domain/events.py  (allocat, out, sku, stock)
+· asking the model (action 0/40 · fix 0/3 · context 19.4k/36k)
+✻ I need to add an expiry date to batches and modify the allocation logic to skip expired batches.
+● Symbol(CreateBatch)
+  ⎿ 1 found · src/allocation/domain/commands.py:18
+· asking the model (action 1/40 · fix 0/3 · context 19.9k/36k)
+✻ I need to update the CreateBatch command to accept an optional expiry date.
+● Update(src/allocation/domain/commands.py)
+  ⎿ edited from line 18
+     - @dataclass
+     - class CreateBatch(Command):
+     -     ref: str
+     -     sku: str
+     -     qty: int
+     -     eta: Optional[date] = None
+     + @dataclass
+     + class CreateBatch(Command):
+     +     ref: str
+     +     sku: str
+     +     qty: int
+     +     eta: Optional[date] = None
+     … 1 more lines
+· asking the model (action 2/40 · fix 0/3 · context 20.6k/36k)
+✻ I need to update the Batch class to include an expiry attribute.
+● Update(src/allocation/domain/model.py)
+  ⎿ edited from line 48
+     - class Batch:
+     -     def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date]):
+     -         self.reference = ref
+     -         self.sku = sku
+     -         self.eta = eta
+     -         self._purchased_quantity = qty
+     … 1 more lines
+     + class Batch:
+     +     def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date], expiry: Optio…
+     +         self.reference = ref
+     +         self.sku = sku
+     +         self.eta = eta
+     +         self.expiry = expiry
+     … 2 more lines
+· asking the model (action 3/40 · fix 0/3 · context 21.6k/36k)
+✻ I need to add an expiry attribute to the Batch class and update the can_allocate method to check for expired batches.
+● Update(src/allocation/domain/model.py)
+  ⎿ edited from line 90
+     - def can_allocate(self, line: OrderLine) -> bool:
+     -         return self.sku == line.sku and self.available_quantity >= line.qty
+     + def can_allocate(self, line: OrderLine) -> bool:
+     +         if self.expiry and self.expiry < date.today():
+     +             return False
+     +         return self.sku == line.sku and self.available_quantity >= line.qty
+· asking the model (action 4/40 · fix 0/3 · context 22.5k/36k)
+✻ I need to add an InvalidExpiry exception class and update the CreateBatch command to raise it when the expiry is invalid.
+● Update(src/allocation/domain/model.py)
+  ⎿ edited from line 8
+     - class Product:
+     -     def __init__(self, sku: str, batches: List[Batch], version_number: int = 0):
+     -         self.sku = sku
+     -         self.batches = batches
+     -         self.version_number = version_number
+     -         self.events = []  # type: List[events.Event]
+     + class InvalidExpiry(Exception):
+     +     pass
+     + 
+     + class Product:
+     +     def __init__(self, sku: str, batches: List[Batch], version_number: int = 0):
+     +         self.sku = sku
+     … 3 more lines
+· asking the model (action 5/40 · fix 0/3 · context 23.5k/36k)
+✻ I need to update the CreateBatch command to raise InvalidExpiry when the expiry is invalid.
+● Update(src/allocation/domain/commands.py)
+  ⎿ edited from line 19
+     - class CreateBatch(Command):
+     -     ref: str
+     -     sku: str
+     -     qty: int
+     -     eta: Optional[date] = None
+     -     expiry: Optional[date] = None
+     + class CreateBatch(Command):
+     +     ref: str
+     +     sku: str
+     +     qty: int
+     +     eta: Optional[date] = None
+     +     expiry: Optional[date] = None
+     … 18 more lines
+· asking the model (action 6/40 · fix 0/3 · context 24.8k/36k)
+✻ I need to ensure the expiry date is saved in the database and loaded correctly.
+● Update(src/allocation/adapters/orm.py)
+  ⎿ edited from line 36
+     - batches = Table(
+     -     "batches",
+     -     metadata,
+     -     Column("id", Integer, primary_key=True, autoincrement=True),
+     -     Column("reference", String(255)),
+     -     Column("sku", ForeignKey("products.sku")),
+     … 3 more lines
+     + batches = Table(
+     +     "batches",
+     +     metadata,
+     +     Column("id", Integer, primary_key=True, autoincrement=True),
+     +     Column("reference", String(255)),
+     +     Column("sku", ForeignKey("products.sku")),
+     … 4 more lines
+· asking the model (action 7/40 · fix 0/3 · context 25.9k/36k)
+● Loop stopped: cancelled · cancelled by the user
+
+Final diff
+
+  src/allocation/adapters/orm.py
+  @@ -41,6 +41,7 @@
+    41   41      Column("sku", ForeignKey("products.sku")),
+    42   42      Column("_purchased_quantity", Integer, nullable=False),
+    43   43      Column("eta", Date, nullable=True),
+         44 +    Column("expiry", Date, nullable=True),
+    44   45  )
+    45   46  
+    46   47  allocations = Table(
+
+  src/allocation/domain/commands.py
+  @@ -21,6 +21,25 @@
+    21   21      sku: str
+    22   22      qty: int
+    23   23      eta: Optional[date] = None
+         24 +    expiry: Optional[date] = None
+         25 +
+         26 +    @property
+         27 +    def eta(self) -> Optional[date]:
+         28 +        return self._eta
+         29 +
+         30 +    @eta.setter
+         31 +    def eta(self, value: Optional[date]):
+         32 +        self._eta = value
+         33 +
+         34 +    @property
+         35 +    def expiry(self) -> Optional[date]:
+         36 +        return self._expiry
+         37 +
+         38 +    @expiry.setter
+         39 +    def expiry(self, value: Optional[date]):
+         40 +        if value is not None and value < date.today():
+         41 +            raise InvalidExpiry(f"Expiry date {value} is in the past for batch {self.ref}")
+         42 +        self._expiry = value
+    24   43  
+    25   44  
+    26   45  @dataclass
+
+  src/allocation/domain/model.py
+  @@ -4,6 +4,9 @@
+     4    4  from typing import Optional, List, Set
+     5    5  from . import commands, events
+     6    6  
+          7 +
+          8 +class InvalidExpiry(Exception):
+          9 +    pass
+     7   10  
+     8   11  class Product:
+     9   12      def __init__(self, sku: str, batches: List[Batch], version_number: int = 0):
+  @@ -46,10 +49,11 @@
+    46   49  
+    47   50  
+    48   51  class Batch:
+    49      -    def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date]):
+         52 +    def __init__(self, ref: str, sku: str, qty: int, eta: Optional[date], expiry: Optional[date] = None):
+    50   53          self.reference = ref
+    51   54          self.sku = sku
+    52   55          self.eta = eta
+         56 +        self.expiry = expiry
+    53   57          self._purchased_quantity = qty
+    54   58          self._allocations = set()  # type: Set[OrderLine]
+    55   59  
+  @@ -87,4 +91,6 @@
+    87   91          return self._purchased_quantity - self.allocated_quantity
+    88   92  
+    89   93      def can_allocate(self, line: OrderLine) -> bool:
+         94 +        if self.expiry and self.expiry < date.today():
+         95 +            return False
+    90   96          return self.sku == line.sku and self.available_quantity >= line.qty
+
+╭─ Result · qwen-feature-2 ────────────────────────────────────────────────────────────────────────╮
+│ ✗ NOT VERIFIED   status cancelled                                                                │
+│ stopped  cancelled · cancelled by the user                                                       │
+│ used     7/40 actions · 0/3 fix rounds · 0 denied · 0 errors · 8 model calls                     │
+│                                                                                                  │
+│ Changed files                                                                                    │
+│   M src/allocation/adapters/orm.py +1 -0                                                         │
+│   M src/allocation/domain/commands.py +19 -0                                                     │
+│   M src/allocation/domain/model.py +7 -1                                                         │
+│                                                                                                  │
+│ Checks  run by the harness, not the model                                                        │
+│   ✓ scope       PASSED    3 changed file(s), all inside the writable scope                       │
+│   ○ compile     NOT RUN   not run: the session stopped with cancelled; use verify or resume t... │
+│   ○ lint        NOT RUN   not run: the session stopped with cancelled; use verify or resume t... │
+│   ○ regression  NOT RUN   not run: the session stopped with cancelled; use verify or resume t... │
+│   ○ feature     NOT RUN   not run: the session stopped with cancelled; use verify or resume t... │
+│   ○ acceptance  NOT RUN   not run: the session stopped with cancelled; use verify or resume t... │
+│                                                                                                  │
+│ Unfinished work                                                                                  │
+│   • The run stopped early: cancelled.                                                            │
+│   • Check compile is not run.                                                                    │
+│   • Check lint is not run.                                                                       │
+│   • Check regression is not run.                                                                 │
+│   • Check feature is not run.                                                                    │
+│   • Check acceptance is not run.                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+Saved. Continue with: python -m harness resume qwen-feature-2

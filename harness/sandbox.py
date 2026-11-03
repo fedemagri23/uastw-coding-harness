@@ -14,9 +14,13 @@ import shlex
 import signal
 import subprocess
 import time
+import uuid
 from itertools import count
 from pathlib import Path
 
+from .cancel import Cancelled
+
+WATCHDOG_GRACE_S = 15  # the in-container watchdog fires this long after the harness deadline
 SHORTENED = "[... output shortened: {omitted} bytes omitted ...]"
 
 # Host variables the local docker *client* may need. Containers get none of them.
@@ -44,13 +48,14 @@ def _kill_group(process):
         pass
 
 
-def run_bounded(argv, timeout, max_bytes, env=None, cwd=None, on_stop=None):
+def run_bounded(argv, timeout, max_bytes, env=None, cwd=None, on_stop=None, should_stop=None):
     """Run argv, capturing at most max_bytes of combined output.
 
     When output is larger, the first and last halves are kept and the middle
     is replaced by a visible "output shortened" marker. When the deadline
     passes (or on Ctrl+C) `on_stop` runs first (to kill a container), then
-    the whole local process group is killed.
+    the whole local process group is killed. `should_stop` is polled while the
+    command runs, so a cancellation stops it within about 0.2 seconds.
     """
     started = time.monotonic()
     process = subprocess.Popen(
@@ -66,6 +71,7 @@ def run_bounded(argv, timeout, max_bytes, env=None, cwd=None, on_stop=None):
     head, tail = bytearray(), bytearray()
     total = 0
     timed_out = False
+    cancelled = False
 
     def stop():
         if on_stop is not None:
@@ -80,11 +86,14 @@ def run_bounded(argv, timeout, max_bytes, env=None, cwd=None, on_stop=None):
     deadline = started + timeout
     try:
         while True:
+            if should_stop is not None and should_stop():
+                cancelled = True
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
                 break
-            if not selector.select(min(remaining, 0.5)):
+            if not selector.select(min(remaining, 0.2)):
                 continue
             chunk = os.read(process.stdout.fileno(), 65536)
             if not chunk:
@@ -98,12 +107,12 @@ def run_bounded(argv, timeout, max_bytes, env=None, cwd=None, on_stop=None):
                 tail += chunk
                 if len(tail) > half:
                     del tail[: len(tail) - half]
-        if timed_out:
+        if timed_out or cancelled:
             stop()
         try:
             process.wait(timeout=max(0.1, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            timed_out = True
+            timed_out = not cancelled
             stop()
             process.wait()
     except BaseException:  # includes KeyboardInterrupt: never leave the command running
@@ -120,11 +129,12 @@ def run_bounded(argv, timeout, max_bytes, env=None, cwd=None, on_stop=None):
         text += "\n" + SHORTENED.format(omitted=total - len(head) - len(tail)) + "\n"
     text += tail.decode("utf-8", "replace")
     result = {
-        "exit_code": None if timed_out else process.returncode,
+        "exit_code": None if timed_out or cancelled else process.returncode,
         "output": text,
         "truncated": truncated,
         "output_bytes": total,
         "timed_out": timed_out,
+        "cancelled": cancelled,
         "duration_s": round(time.monotonic() - started, 2),
     }
     if timed_out:
@@ -141,6 +151,7 @@ class DockerSandbox:
         self.docker = docker
         self._names = count(1)
         self.client_env = {k: os.environ[k] for k in DOCKER_CLIENT_ENV if k in os.environ}
+        self.cancel = None  # optional CancelToken, polled while a command runs
 
     def check_available(self):
         """Raise SandboxUnavailable unless docker runs and the image exists."""
@@ -162,7 +173,7 @@ class DockerSandbox:
         binds = [(Path(workspace), "/work")] + [(Path(src), dst) for src, dst in mounts]
         cmd = [
             self.docker, "run", "--rm", "--pull", "never",
-            "--name", name, "--label", f"stage1.run={self.run_id}",
+            "--name", name, "--label", f"harness.run={self.run_id}",
             "--network", "none",
             "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=64m",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
@@ -183,15 +194,23 @@ class DockerSandbox:
     def run(self, argv, workspace, mounts=(), timeout=None):
         """Run argv in a new container. The workspace and all mounts are read-only."""
         self.check_available()
-        name = f"stage1-{self.run_id}-{next(self._names)}"
-        cmd = self.build_argv(name, argv, workspace, mounts)
+        limit = timeout or self.settings.command_timeout_s
+        name = f"harness-{self.run_id}-{uuid.uuid4().hex[:6]}-{next(self._names)}"
+        # Watchdog inside the container: it ends the command even if the harness
+        # itself is killed and can no longer run `docker kill`.
+        guarded = ["timeout", "-s", "KILL", str(int(limit) + WATCHDOG_GRACE_S), *argv]
+        cmd = self.build_argv(name, guarded, workspace, mounts)
         result = run_bounded(
             cmd,
-            timeout or self.settings.command_timeout_s,
+            limit,
             self.settings.output_bytes,
             env=self.client_env,
             on_stop=lambda: self.kill(name),
+            should_stop=self.cancel.is_set if self.cancel else None,
         )
+        if result["cancelled"]:
+            self.cleanup()
+            raise Cancelled(f"command stopped by cancellation: {shlex.join(argv)}")
         return {"command": shlex.join(argv), "container": name, **result}
 
     def kill(self, name):
@@ -199,7 +218,7 @@ class DockerSandbox:
 
     def leftover_containers(self):
         out = subprocess.run(
-            [self.docker, "ps", "-aq", "--filter", f"label=stage1.run={self.run_id}"],
+            [self.docker, "ps", "-aq", "--filter", f"label=harness.run={self.run_id}"],
             capture_output=True, text=True, timeout=30, env=self.client_env,
         )
         return out.stdout.split()

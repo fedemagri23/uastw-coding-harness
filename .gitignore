@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
 settings.toml
+.env
 vendor/
 runs/
+sessions/
+dist/
 stage-1-coding-harness.pdf
+stage-2-coding-harness.pdf
+*.zip
+sessions-demo/
