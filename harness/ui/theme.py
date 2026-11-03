@@ -11,6 +11,9 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
+LOGO = "◈"
+
+
 def clean(text):
     """Remove terminal control sequences. Model replies and tool output are untrusted."""
     return _CONTROL.sub("", _ESCAPES.sub("", str(text)))
@@ -18,7 +21,7 @@ def clean(text):
 
 class Theme:
     CODES = {"dim": "2", "bold": "1", "red": "31", "green": "32", "yellow": "33", "blue": "34", "magenta": "35",
-             "cyan": "36", "accent": "38;5;209", "muted": "38;5;245", "add": "38;5;114", "del": "38;5;210",
+             "cyan": "36", "accent": "38;5;141", "muted": "38;5;245", "add": "38;5;114", "del": "38;5;210",
              "add_bg": "48;5;22", "del_bg": "48;5;52"}
 
     def __init__(self, stream=None, color=None):

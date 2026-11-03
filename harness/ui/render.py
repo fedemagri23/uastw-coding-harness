@@ -13,7 +13,7 @@ import threading
 import time
 
 from ..verification import summary_line
-from .theme import Theme, clean, fit, panel
+from .theme import LOGO, Theme, clean, fit, panel
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 LABELS = {"read_file": "Read", "list_files": "List", "search_files": "Search", "write_file": "Write",
@@ -230,7 +230,7 @@ class ConsoleRenderer:
         self.context = event
         if event.get("compacted_now"):
             self.spinner.stop()
-            self.print(self.p("✻", "muted") + self.p(f" Context compacted to {event['chars'] / 1000:.1f}k characters "
+            self.print(self.p(LOGO, "muted") + self.p(f" Context compacted to {event['chars'] / 1000:.1f}k characters "
                        f"({event['compacted_turns']} older steps summarised, task contract kept)", "muted"))
 
     def on_model_request(self, event):
@@ -251,7 +251,7 @@ class ConsoleRenderer:
         self.print(self.p(f"  ! model request failed, retry {event['attempt']}: {clean(event['error'])[:150]}", "yellow"))
 
     def on_thought(self, event):
-        self.print(self.p("✻ " + clean(event["text"])[:300], "muted"))
+        self.print(self.p(f"{LOGO} " + clean(event["text"])[:300], "muted"))
 
     def on_invalid_reply(self, event):
         self.print(self.p(f"  ! invalid reply #{event['count']}: {clean(event['result']['output'])[:150]}", "yellow"))
@@ -345,7 +345,7 @@ class ConsoleRenderer:
     def welcome(self, version, project, task, model, sandbox_ok, sandbox_text):
         state = self.p("ready", "green") if sandbox_ok else self.p("unavailable", "yellow")
         lines = [
-            self.p("✻ ", "accent") + self.p("Coding Harness", "bold") + self.p(f"  v{version}", "muted"),
+            self.p(f"{LOGO} ", "accent") + self.p("Coding Harness", "accent", "bold") + self.p(f"  v{version}", "muted"),
             "",
             self.p("project  ", "muted") + f"{project or 'none'}" + (f" / {task}" if task else ""),
             self.p("model    ", "muted") + clean(model),

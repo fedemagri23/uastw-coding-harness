@@ -47,7 +47,7 @@ class Shell:
         if not theme.color:
             return mark
         # \001 and \002 tell readline that the colour codes take no screen space.
-        return "\001\033[38;5;209;1m\002" + mark + "\001\033[0m\002"
+        return "\001\033[38;5;141;1m\002" + mark + "\001\033[0m\002"
 
     def _complete(self, text, state):
         line = readline.get_line_buffer() if readline else text
