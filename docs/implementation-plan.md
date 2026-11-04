@@ -49,5 +49,5 @@ folder continues its Git history on the `stage-2` branch.
 - [x] Automated tests for Stage 2 and Stage 1
 - [x] README: setup, model settings, design decisions, known limits, credits, diagrams
 - [x] Real-model run with recorded evidence and manual help identified
-- [ ] Video of at most 4 minutes (script in `docs/video-script.md`; to be recorded by the author)
+- [x] [Video of at most 4 minutes](https://drive.google.com/file/d/19rwCYs-zV_6I_Crm4coHD05UWfxw_XtL/view?usp=sharing) (script in `docs/video-script.md`)
 - [ ] Submit to Moodle: repository link and exact commit, or the versioned ZIP

@@ -25,6 +25,10 @@ workflow all still work.
 │ used     10/40 actions · 1/3 fix rounds · 0 denied · 0 errors│
 ```
 
+## Video
+
+[Demo video](https://drive.google.com/file/d/19rwCYs-zV_6I_Crm4coHD05UWfxw_XtL/view?usp=sharing), at most 4 minutes ([script](docs/video-script.md)).
+
 ## Authors and contributions
 
 - **Federico Magri**: individual submission. Chose the target and the feature,
